@@ -1,0 +1,269 @@
+---
+title: "Yay Area Foodie Review"
+output: html_document
+date: "2024-02-01"
+---
+# SETUP ===============
+```{r setup, include=FALSE}
+
+rm(list = ls())
+
+knitr::opts_chunk$set(echo = FALSE,
+                      message = FALSE,
+                      warning = FALSE,
+                      results = 'hide')
+
+library(tidyverse)
+library(tidygeocoder)
+library(mapboxapi)
+library(readxl)
+library(janitor)
+library(leaflet)
+library(leaflet.extras)
+library(sf) 
+library(htmltools)
+```
+```{r set wd}
+setwd("/Users/juliarosales/Documents/professional development/portfolio projects/R/Yay Area Reviews")
+```
+
+# DATA IMPORT ===============
+
+```{r}
+# reviews <- read_excel("Review Submissions (Responses).xlsx")
+submissions <- read_csv("Review Submissions.csv")
+```
+
+# DATA CLEANING ===============
+
+```{r}
+# clean variables names
+submissions <- submissions %>% clean_names()
+
+# rename variables
+submissions <- submissions %>%
+  rename(parking = how_was_the_parking_situation,
+         recommend = would_you_recommend_and_or_go_again,
+         review_comments = other_comments,
+         request_comments = comments) %>%
+  mutate(across(food_quality:service, ~case_when(
+                  str_detect(.x, "1") ~ "1",
+                  str_detect(.x, "2") ~ "2",
+                  str_detect(.x, "3") ~ "3",
+                  str_detect(.x, "4") ~ "4",
+                  str_detect(.x, "5") ~ "5",
+                  TRUE ~ .x)),
+        affordability = case_when(
+           str_detect(affordability, "under $20") ~ 1,
+           str_detect(affordability, "$20-40") ~ 2,
+           str_detect(affordability, "$40-60") ~ 3,
+           str_detect(affordability, "over $60") ~ 4))
+
+```
+
+# LOCATION GEOCODING ===============
+
+```{r}
+submissions <- submissions %>% 
+  mutate(location_name_city = paste0(location_name_2, ", ", city_3)) %>%
+  geocode(address = location_name_city,
+                               method = "osm") %>%
+  select(-location_name_city)
+```
+
+# MAP LABELS ===============
+
+```{r}
+location_label <- paste0(
+  "<b>", submissions$location_name_2, "</b>", "<br>",
+  submissions$city_3
+  ) %>%
+  lapply(htmltools::HTML)
+```
+
+# DATA FILTERING FOR MAP FILTERS ===============
+
+```{r}
+# separate reviews from requests (if location is present in both then its a review)
+reviews <- submissions %>% filter(review_or_request == "Review")
+requests <- submissions %>% filter(review_or_request == "Request" & !(location_name %in% reviews$location_name))
+```
+
+
+# MAP BUILDING ===============
+
+```{r}
+reviews %>%
+  leaflet() %>%
+  addProviderTiles(providers$CartoDB.Positron, 
+                   # group = c("None", "City Boundaries", "Zipcode Boundaries")
+                   ) %>% 
+  # addMapPane("polygons", zIndex = 400) %>%
+  addMapPane("locations", zIndex = 450) %>%
+  addCircleMarkers(
+    data = reviews,
+    lat = ~lat,
+    lng = ~long,
+    color="#7A3829",
+    fillColor = "#A05746",
+    weight = 1.5, stroke = T, radius = 4, fillOpacity = 0.9, opacity = 0.9,
+    label = location_label,
+    # popup = ~agency_popup,
+    group = "Reviews",
+    options = pathOptions(pane = "locations"))
+```
+
+
+# MAP BUILDING ==============
+
+## Base Map
+```{r}
+
+map <- agencies_geocoded %>%
+  leaflet() %>%
+  addProviderTiles(providers$CartoDB.Positron, group = c("None", "City Boundaries", "Zipcode Boundaries")) %>% 
+  addMapPane("polygons", zIndex = 400) %>%
+  addMapPane("locations", zIndex = 450) 
+
+```
+
+## Markers
+```{r}
+
+map <- map %>%
+
+## adding circle markers for agency locations ----
+ addCircleMarkers(
+    data = agencies_geocoded,
+    lat = ~lat,
+    lng = ~long,
+    color="#7A3829",
+    fillColor = "#A05746",
+    weight = 1.5, stroke = T, radius = 4, fillOpacity = 0.9, opacity = 0.9,
+    label = ~agency_label,
+    labelOptions = labelOptions(textsize = "12px"),
+    popup = ~agency_popup,
+    group = "Agencies",
+    options = pathOptions(pane = "locations")) %>%
+  
+  ## adding regular markers to enable search functionality ----
+  addMarkers(
+    data = agencies_geocoded,
+    lat = ~lat,
+    lng = ~long,
+    label = ~agency_label,
+    popup = ~agency_popup,
+    group = "Agency Search") 
+  
+  # addMarkers(
+  #   lat = 37.741367939744066, lng = -122.20159627433743,
+  #   label = "Alameda County Community Food Bank",
+  #   labelOptions = labelOptions(noHide = T, textsize = "12px")) %>%
+  
+```
+
+## Polygons 
+```{r}
+ 
+map <- map %>%
+  
+  ## city boundary polygon ----
+  addPolygons(
+    data = city_sf,
+    group="City Boundaries",
+    color = "black", # border color
+    fillColor = "#E27D1F", # fill color
+    fillOpacity = 0.4, # fill opacity
+    stroke= TRUE, # T = border
+    weight=1, # weight of border
+    opacity=0.4, # opacity of border
+    label = ~NAME,
+    labelOptions = labelOptions(textsize = "12px"),
+    popup = ~city_popup,
+    highlight = highlightOptions(
+      weight = 1, # highlight border thickness
+      opacity = 0.7, # highlight border opacity
+      # color = "#E27D1F", # highlight border color
+      fillOpacity = 0.7, # highlight fill color opacity
+      bringToFront = FALSE),
+    options = pathOptions(pane = "polygons")) %>%
+  
+  ## zipcode boundary polygon ----
+  addPolygons(
+    data = zips_sf,
+    group="Zipcode Boundaries",
+    color = "black", # border color
+    fillColor = "#E27D1F", # fill color
+    fillOpacity = 0.4, #fill opacity
+    stroke= TRUE, # T = border
+    weight=1, # weight of border
+    opacity=0.4, # opacity of border
+    label = ~ZCTA,
+    labelOptions = labelOptions(textsize = "12px"),
+    highlight = highlightOptions(
+      weight = 1, # highlight border thickness
+      opacity = 0.7, # highlight border opacity
+      # color = "#E27D1F", # highlight border color
+      fillOpacity = 0.7, # highlight fill opacity
+      bringToFront = TRUE),
+      options = pathOptions(pane = "polygons")) %>%
+  
+  ## county boundary polygon ----
+  addPolygons(
+    data = county_sf,
+    # group="County Boundaries",
+    color = "#7A3829", # border color
+    fillColor = "white", # fill color
+    fillOpacity = -1, # fill opacity
+    stroke= TRUE, # T = border
+    weight=2, # weight of border
+    opacity=0.8, # opacity of border
+    label = ~NAMELSAD,
+    labelOptions = labelOptions(textsize = "12px"),
+    options = pathOptions(pane = "polygons")) 
+```
+
+## Layer Control
+```{r}
+map <- map %>%
+  
+## layer-group control ----
+  addLayersControl(
+    # overlayGroups = c("Agencies"),
+    baseGroups = c("None", "City Boundaries", "Zipcode Boundaries"),
+    options = layersControlOptions(collapsed=FALSE))
+```
+
+## Search Functionality
+```{r}
+map <- map %>%
+
+  ## adding search functionality ----
+  addSearchFeatures(
+    targetGroups = c("Agency Search"),
+    options = searchFeaturesOptions(textPlaceholder = "Search Agency Name",
+                                    collapsed = FALSE,
+                                    autoResize=TRUE,
+                                    propertyName = "label",
+                                    position = "topright",
+                                    zoom=13, 
+                                    openPopup = FALSE, 
+                                    firstTipSubmit = TRUE,
+                                    autoCollapseTime = 1200,
+                                    autoCollapse = FALSE, 
+                                    hideMarkerOnCollapse = TRUE)) %>%
+  addSearchOSM(options = searchOptions(textPlaceholder = "Search for a Place or Address",
+                                       collapsed = TRUE, 
+                                       #autoCollapse = TRUE,
+                                       autoCollapseTime = 5,
+                                       hideMarkerOnCollapse = TRUE,
+                                       position = "topleft",
+                                       minLength = 2 ))%>%
+  hideGroup("Agency Search")
+```
+
+# MAP PREVIEW ==============
+```{r}
+map
+```
+
